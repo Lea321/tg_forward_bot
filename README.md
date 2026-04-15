@@ -1,4 +1,4 @@
-# Telegram 私聊中转机器人 (Forward Bot)
+# 🤖 Telegram 私聊中转机器人 (Forward Bot)
 参考项目：[dm-gateway-bot](https://github.com/ZenmoFeiShi/dm-gateway-bot)
 
 这是一个基于 `python-telegram-bot` 开发的私聊中转机器人。它可以作为普通用户与管理员之间的沟通桥梁，支持全媒体消息转发，并内置身份验证功能。
