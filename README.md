@@ -20,7 +20,8 @@
 | :--- | :--- | :--- |
 | `BOT_TOKEN` | 从 [@BotFather](https://t.me/BotFather) 获得的机器人令牌 | 必填 |
 | `OWNER_ID` | 管理员的 Telegram 数字 ID | 必填 |
-| `EXPIRE_HOURS` | 验证有效期（单位：小时） | `2.0` |
+| `EXPIRE_HOURS` | 验证有效期（单位：小时），超出这个时间联系需要重新验证。 | `2.0` |
+| `DELETE_DELAY` | 闪速消息有效期（单位：秒），部分提醒信息到时自动删除，优化聊天体验 | `2.0` |
 
 ## 🚀 部署指南
 
@@ -41,7 +42,8 @@ services:
     environment:
       - BOT_TOKEN=YOUR_BOT_TOKEN # 必填
       - OWNER_ID=YOUR_Telegram_ID # 必填
-      - EXPIRE_HOURS=2 # 可删除，默认2
+      - EXPIRE_HOURS=2 # 可删除，默认2小时
+      - DELETE_DELAY=2 # 可删除，默认2秒
 ```
 运行命令启动：
 

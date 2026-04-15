@@ -3,6 +3,8 @@ import logging
 import random
 import re
 import time
+import html
+import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -20,11 +22,18 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
+# 验证有效期（小时）
 try:
     EXPIRE_HOURS = float(os.getenv("EXPIRE_HOURS", "2"))
 except:
     EXPIRE_HOURS = 2.0
 EXPIRE_TIME = EXPIRE_HOURS * 3600
+
+# 自动删除消息的延迟（秒）
+try:
+    DELETE_DELAY = int(os.getenv("DELETE_DELAY", "2"))
+except:
+    DELETE_DELAY = 2
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -42,6 +51,8 @@ CAPTCHAS = [
     ("请选择：🐸", "🐸"),
 ]
 
+# --- 工具函数 ---
+
 
 def generate_captcha():
     q, a = random.choice(CAPTCHAS)
@@ -55,8 +66,36 @@ def generate_captcha():
 def extract_user_id(message):
     """从消息中提取 ID"""
     text = message.text or message.caption or ""
-    match = re.search(r"ID[:：]\s*(\d+)", text)
-    return int(match.group(1)) if match else None
+    # 兼容 id=123 或 ID: 123 格式
+    match = re.search(r"(id|ID)[=：:\s]*(\d+)", text, re.IGNORECASE)
+    return int(match.group(2)) if match else None
+
+
+async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
+    """JobQueue 回调：执行删除"""
+    job = context.job
+    chat_id, message_id = job.data
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logger.debug(f"消息已预先删除或无法删除: {e}")
+
+
+async def send_flash_message(
+    context: ContextTypes.DEFAULT_TYPE, chat_id, text, reply_markup=None
+):
+    """发送一条闪速消息（会自动删除）"""
+    try:
+        msg = await context.bot.send_message(
+            chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML"
+        )
+        # 调度删除任务
+        context.job_queue.run_once(
+            delete_message_job, when=DELETE_DELAY, data=(chat_id, msg.message_id)
+        )
+        return msg
+    except Exception as e:
+        logger.error(f"发送闪速消息失败: {e}")
 
 
 # --- 核心转发逻辑 ---
@@ -64,8 +103,13 @@ def extract_user_id(message):
 
 async def forward_to_owner(context, user_id, user_name, msg):
     """转发给管理员（全媒体支持）"""
-    username = f"(@{msg.from_user.username})" if msg.from_user.username else ""
-    header = f"👤 <b>{user_name}</b> {username}\n用户ID: <code>{user_id}</code>"
+    safe_name = html.escape(user_name)
+    username_str = f"(@{msg.from_user.username})" if msg.from_user.username else ""
+    user_id_str = (
+        f"用户ID：{user_id}" if msg.from_user.username else f"tg://user?id={user_id}"
+    )
+
+    header = f"👤 <b>{safe_name}</b> {username_str}\n{user_id_str}"
 
     try:
         if msg.text:
@@ -78,14 +122,14 @@ async def forward_to_owner(context, user_id, user_name, msg):
             await context.bot.send_photo(
                 OWNER_ID,
                 msg.photo[-1].file_id,
-                caption=f"{header}{msg.caption or ''}",
+                caption=f"{header}\n{msg.caption or ''}",
                 parse_mode="HTML",
             )
         elif msg.video:
             await context.bot.send_video(
                 OWNER_ID,
                 msg.video.file_id,
-                caption=f"{header}{msg.caption or ''}",
+                caption=f"{header}\n{msg.caption or ''}",
                 parse_mode="HTML",
             )
         elif msg.sticker:
@@ -130,7 +174,7 @@ async def reply_to_user(context, target_id, msg):
     """回复给用户（全媒体支持）"""
     try:
         if msg.text:
-            await context.bot.send_message(target_id, f"{msg.text}", parse_mode="HTML")
+            await context.bot.send_message(target_id, msg.text)
         elif msg.photo:
             await context.bot.send_photo(
                 target_id, msg.photo[-1].file_id, caption=msg.caption or ""
@@ -172,21 +216,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
+    # 管理员逻辑
     if user_id == OWNER_ID:
         if msg.reply_to_message:
             target_id = extract_user_id(msg.reply_to_message)
             if target_id and await reply_to_user(context, target_id, msg):
-                await msg.reply_text("✅ 已送达")
+                await send_flash_message(context, OWNER_ID, "✅ 已送达")
                 return
-        await msg.reply_text("💡 请回复转发消息进行回应。")
+        await send_flash_message(context, OWNER_ID, "💡 请回复转发消息进行回应。")
         return
 
+    # 用户逻辑：检查验证是否过期
     if (
         user_id in verified_users
         and (time.time() - verified_users[user_id]) > EXPIRE_TIME
     ):
         del verified_users[user_id]
 
+    # 用户逻辑：需要验证
     if user_id not in verified_users:
         q, answer, keyboard = generate_captcha()
         pending_users[user_id] = {"answer": answer}
@@ -197,8 +244,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # 用户逻辑：转发消息
     await forward_to_owner(context, user_id, update.effective_user.first_name, msg)
-    await msg.reply_text("✅ 已送达")
+    await send_flash_message(context, user_id, "✅ 已送达")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -212,34 +260,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ):
         verified_users[user_id] = time.time()
         del pending_users[user_id]
+
+        # 修改消息为验证通过
         await query.edit_message_text(f"✅ 验证通过，有效期 {EXPIRE_HOURS} 小时。")
+
+        # 调度删除该验证成功消息
+        context.job_queue.run_once(
+            delete_message_job,
+            when=DELETE_DELAY,
+            data=(query.message.chat_id, query.message.message_id),
+        )
     else:
         await query.answer("❌ 选错啦，请重试", show_alert=True)
 
 
 async def post_init(application: Application):
-    """启动成功后的通知逻辑"""
+    """启动通知"""
     if OWNER_ID != 0:
         try:
             await application.bot.send_message(
                 OWNER_ID,
-                f"🚀 <b>机器人启动成功！</b>\n当前验证有效期设置：{EXPIRE_HOURS} 小时。\n直接回复转发的消息即可回应用户。",
+                f"🚀 <b>机器人启动成功！</b>\n"
+                f"⏱ 闪速消息延迟：{DELETE_DELAY} 秒\n"
+                f"⏳ 验证有效期：{EXPIRE_HOURS} 小时",
                 parse_mode="HTML",
             )
         except Exception as e:
-            logger.error(f"启动通知发送失败: {e}")
+            logger.error(f"启动通知失败: {e}")
 
 
 def main():
     if not BOT_TOKEN or not OWNER_ID:
-        print("错误: 缺失 BOT_TOKEN 或 OWNER_ID")
+        print("错误: 缺失环境变量 BOT_TOKEN 或 OWNER_ID")
         return
-    # 加入 post_init 以在启动时发消息
+
+    # 默认开启 JobQueue
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
     app.add_handler(CommandHandler("start", lambda u, c: handle_message(u, c)))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
-    print(f"Bot 运行中 (有效期: {EXPIRE_HOURS}h)...")
+
+    print(f"Bot 运行中 (延迟删除: {DELETE_DELAY}s)...")
     app.run_polling()
 
 
