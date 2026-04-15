@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # 安装运行所需的依赖库
-RUN pip install --no-cache-dir python-telegram-bot python-dotenv
+RUN pip install --no-cache-dir python-telegram-bot[job-queue] python-dotenv
 
 # 将当前目录的所有文件复制到容器的 /app 目录
 COPY . .
