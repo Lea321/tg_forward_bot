@@ -267,8 +267,8 @@ async def post_init(application: Application) -> None:
             await application.bot.send_message(
                 chat_id=OWNER_ID,
                 text="🚀 <b>机器人已成功启动并上线！</b>\n\n当前配置：\n"
-                f"• 验证有效期：{EXPIRE_HOURS} 小时\n"
-                f"• 消息删除延迟：{DELETE_DELAY} 秒",
+                f"⌛ 验证有效期：{EXPIRE_HOURS} 小时\n"
+                f"⏱️ 消息删除延迟：{DELETE_DELAY} 秒",
                 parse_mode="HTML",
             )
         except Exception as e:
