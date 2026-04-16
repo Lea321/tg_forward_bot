@@ -4,7 +4,6 @@ import random
 import re
 import time
 import html
-import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -21,6 +20,33 @@ load_dotenv()
 # --- 配置 ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+# 扩展颜色池
+MARKS = [
+    "💎",
+    "🔮",
+    "🍀",
+    "🔥",
+    "🌈",
+    "⚡️",
+    "🌙",
+    "🍕",
+    "🍔",
+    "🍟",
+    "🌭",
+    "🍿",
+    "🍧",
+    "🍭",
+    "🍡",
+    "❤️",
+    "🩷",
+    "🧡",
+    "💛",
+    "💚",
+    "💙",
+    "🩵",
+    "💜",
+]
 
 # 验证有效期（小时）
 try:
@@ -40,8 +66,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-pending_users = {}  # user_id: {"answer": str}
-verified_users = {}  # user_id: timestamp
+pending_users = {}
+verified_users = {}
 
 CAPTCHAS = [
     ("请选择：🐶", "🐶"),
@@ -54,6 +80,10 @@ CAPTCHAS = [
 # --- 工具函数 ---
 
 
+def get_user_mark(user_id):
+    return MARKS[user_id % len(MARKS)]
+
+
 def generate_captcha():
     q, a = random.choice(CAPTCHAS)
     emojis = ["🐶", "🐱", "🐼", "🦊", "🐸"]
@@ -64,150 +94,104 @@ def generate_captcha():
 
 
 def extract_user_id(message):
-    """从消息中提取 ID"""
     text = message.text or message.caption or ""
-    # 兼容 id=123 或 ID: 123 格式
     match = re.search(r"(id|ID)[=：:\s]*(\d+)", text, re.IGNORECASE)
     return int(match.group(2)) if match else None
 
 
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """JobQueue 回调：执行删除"""
     job = context.job
     chat_id, message_id = job.data
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logger.debug(f"消息已预先删除或无法删除: {e}")
+    except:
+        pass
 
 
 async def send_flash_message(
     context: ContextTypes.DEFAULT_TYPE, chat_id, text, reply_markup=None
 ):
-    """发送一条闪速消息（会自动删除）"""
     try:
         msg = await context.bot.send_message(
             chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML"
         )
-        # 调度删除任务
         context.job_queue.run_once(
             delete_message_job, when=DELETE_DELAY, data=(chat_id, msg.message_id)
         )
         return msg
     except Exception as e:
-        logger.error(f"发送闪速消息失败: {e}")
+        logger.error(f"Flash message error: {e}")
 
 
 # --- 核心转发逻辑 ---
 
 
 async def forward_to_owner(context, user_id, user_name, msg):
-    """转发给管理员（全媒体支持）"""
+    """转发并为用户昵称上色"""
     safe_name = html.escape(user_name)
+    user_mark = get_user_mark(user_id)
     username_str = f"(@{msg.from_user.username})" if msg.from_user.username else ""
     user_id_str = (
         f"用户ID：{user_id}" if msg.from_user.username else f"tg://user?id={user_id}"
     )
 
-    header = f"👤 <b>{safe_name}</b> {username_str}\n{user_id_str}"
+    header = f"{user_mark} <b>{safe_name}</b> {username_str}\n{user_id_str}"
 
     try:
+        params = {"chat_id": OWNER_ID, "parse_mode": "HTML"}
+
         if msg.text:
             await context.bot.send_message(
-                OWNER_ID,
-                f"{header}\n-----------------------\n{msg.text}",
-                parse_mode="HTML",
+                **params, text=f"{header}\n-----------------------\n{msg.text}"
             )
         elif msg.photo:
             await context.bot.send_photo(
-                OWNER_ID,
-                msg.photo[-1].file_id,
+                **params,
+                photo=msg.photo[-1].file_id,
                 caption=f"{header}\n{msg.caption or ''}",
-                parse_mode="HTML",
             )
         elif msg.video:
             await context.bot.send_video(
-                OWNER_ID,
-                msg.video.file_id,
+                **params,
+                video=msg.video.file_id,
                 caption=f"{header}\n{msg.caption or ''}",
-                parse_mode="HTML",
             )
         elif msg.sticker:
-            await context.bot.send_message(OWNER_ID, header, parse_mode="HTML")
+            await context.bot.send_message(**params, text=header)
             await context.bot.send_sticker(OWNER_ID, msg.sticker.file_id)
         elif msg.voice:
             await context.bot.send_voice(
-                OWNER_ID, msg.voice.file_id, caption=header, parse_mode="HTML"
+                **params, voice=msg.voice.file_id, caption=header
             )
         elif msg.video_note:
-            await context.bot.send_message(OWNER_ID, header, parse_mode="HTML")
+            await context.bot.send_message(**params, text=header)
             await context.bot.send_video_note(OWNER_ID, msg.video_note.file_id)
         elif msg.audio:
             await context.bot.send_audio(
-                OWNER_ID,
-                msg.audio.file_id,
-                caption=f"{header}{msg.caption or ''}",
-                parse_mode="HTML",
+                **params,
+                audio=msg.audio.file_id,
+                caption=f"{header}\n{msg.caption or ''}",
             )
         elif msg.document:
             await context.bot.send_document(
-                OWNER_ID,
-                msg.document.file_id,
-                caption=f"{header}{msg.caption or ''}",
-                parse_mode="HTML",
+                **params,
+                document=msg.document.file_id,
+                caption=f"{header}\n{msg.caption or ''}",
             )
         elif msg.animation:
             await context.bot.send_animation(
-                OWNER_ID,
-                msg.animation.file_id,
-                caption=f"{header}{msg.caption or ''}",
-                parse_mode="HTML",
+                **params,
+                animation=msg.animation.file_id,
+                caption=f"{header}\n{msg.caption or ''}",
             )
         else:
-            await context.bot.send_message(OWNER_ID, header, parse_mode="HTML")
+            await context.bot.send_message(**params, text=header)
             await msg.forward(OWNER_ID)
     except Exception as e:
-        logger.error(f"转发失败: {e}")
+        logger.error(f"Forwarding failed: {e}")
 
 
-async def reply_to_user(context, target_id, msg):
-    """回复给用户（全媒体支持）"""
-    try:
-        if msg.text:
-            await context.bot.send_message(target_id, msg.text)
-        elif msg.photo:
-            await context.bot.send_photo(
-                target_id, msg.photo[-1].file_id, caption=msg.caption or ""
-            )
-        elif msg.video:
-            await context.bot.send_video(
-                target_id, msg.video.file_id, caption=msg.caption or ""
-            )
-        elif msg.sticker:
-            await context.bot.send_sticker(target_id, msg.sticker.file_id)
-        elif msg.voice:
-            await context.bot.send_voice(target_id, msg.voice.file_id)
-        elif msg.video_note:
-            await context.bot.send_video_note(target_id, msg.video_note.file_id)
-        elif msg.audio:
-            await context.bot.send_audio(
-                target_id, msg.audio.file_id, caption=msg.caption or ""
-            )
-        elif msg.document:
-            await context.bot.send_document(
-                target_id, msg.document.file_id, caption=msg.caption or ""
-            )
-        elif msg.animation:
-            await context.bot.send_animation(target_id, msg.animation.file_id)
-        else:
-            await msg.forward(target_id)
-        return True
-    except Exception as e:
-        logger.error(f"回复失败: {e}")
-        return False
-
-
-# --- 事件处理 ---
+# --- 消息/回调处理 ---
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,35 +200,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # 管理员逻辑
     if user_id == OWNER_ID:
         if msg.reply_to_message:
             target_id = extract_user_id(msg.reply_to_message)
-            if target_id and await reply_to_user(context, target_id, msg):
-                await send_flash_message(context, OWNER_ID, "✅ 已送达")
-                return
-        await send_flash_message(context, OWNER_ID, "💡 请回复转发消息进行回应。")
+            if target_id:
+                try:
+                    await msg.copy(target_id)
+                    await send_flash_message(context, OWNER_ID, "✅ 已送达")
+                    return
+                except:
+                    await send_flash_message(
+                        context, OWNER_ID, "❌ 发送失败，可能被拉黑"
+                    )
+                    return
+        await send_flash_message(context, OWNER_ID, "💡 请回复转发的消息。")
         return
 
-    # 用户逻辑：检查验证是否过期
     if (
         user_id in verified_users
         and (time.time() - verified_users[user_id]) > EXPIRE_TIME
     ):
         del verified_users[user_id]
 
-    # 用户逻辑：需要验证
     if user_id not in verified_users:
         q, answer, keyboard = generate_captcha()
         pending_users[user_id] = {"answer": answer}
         await msg.reply_text(
-            f"🛡 <b>请进行安全验证</b>：\n{q}",
-            reply_markup=keyboard,
-            parse_mode="HTML",
+            f"🛡 <b>请进行验证</b>：\n{q}", reply_markup=keyboard, parse_mode="HTML"
         )
         return
 
-    # 用户逻辑：转发消息
     await forward_to_owner(context, user_id, update.effective_user.first_name, msg)
     await send_flash_message(context, user_id, "✅ 已送达")
 
@@ -261,47 +246,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         verified_users[user_id] = time.time()
         del pending_users[user_id]
 
-        # 修改消息为验证通过
-        await query.edit_message_text(f"✅ 验证通过，有效期 {EXPIRE_HOURS} 小时。")
-
-        # 调度删除该验证成功消息
+        user_mark = get_user_mark(user_id)
+        await query.edit_message_text(
+            f"✅ 验证通过！\n🎨 您的专属标识：{user_mark}\n⏳ 对话有效期：{EXPIRE_HOURS}小时"
+        )
         context.job_queue.run_once(
             delete_message_job,
             when=DELETE_DELAY,
             data=(query.message.chat_id, query.message.message_id),
         )
     else:
-        await query.answer("❌ 选错啦，请重试", show_alert=True)
+        await query.answer("❌ 选错啦！", show_alert=True)
 
 
-async def post_init(application: Application):
-    """启动通知"""
+# --- 新增：上线通知功能 ---
+async def post_init(application: Application) -> None:
+    """机器人启动后执行的任务"""
     if OWNER_ID != 0:
         try:
             await application.bot.send_message(
-                OWNER_ID,
-                f"🚀 <b>机器人启动成功！</b>\n"
-                f"⏱ 闪速消息延迟：{DELETE_DELAY} 秒\n"
-                f"⏳ 验证有效期：{EXPIRE_HOURS} 小时",
+                chat_id=OWNER_ID,
+                text="🚀 <b>机器人已成功启动并上线！</b>\n\n当前配置：\n"
+                f"• 验证有效期：{EXPIRE_HOURS} 小时\n"
+                f"• 消息删除延迟：{DELETE_DELAY} 秒",
                 parse_mode="HTML",
             )
         except Exception as e:
-            logger.error(f"启动通知失败: {e}")
+            logger.error(f"发送上线通知失败: {e}")
 
 
 def main():
     if not BOT_TOKEN or not OWNER_ID:
-        print("错误: 缺失环境变量 BOT_TOKEN 或 OWNER_ID")
+        print("错误：请先在 .env 中设置 BOT_TOKEN 和 OWNER_ID")
         return
 
-    # 默认开启 JobQueue
+    # 在这里添加 post_init 钩子
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    app.add_handler(CommandHandler("start", lambda u, c: handle_message(u, c)))
+    app.add_handler(CommandHandler("start", handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_message))
 
-    print(f"Bot 运行中 (延迟删除: {DELETE_DELAY}s)...")
+    print("Bot 运行中...")
     app.run_polling()
 
 
